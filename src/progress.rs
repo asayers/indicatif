@@ -10,7 +10,7 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::style::ProgressStyle;
 use crate::utils::{duration_to_secs, secs_to_duration, Estimate};
-use console::Term;
+use console::{style, Term};
 
 /// The drawn state of an element.
 #[derive(Clone, Debug)]
@@ -223,6 +223,7 @@ pub(crate) struct ProgressState {
     est: Estimate,
     tick_thread: Option<thread::JoinHandle<()>>,
     steady_tick: u64,
+    log_level: Option<log::LevelFilter>,
 }
 
 impl ProgressState {
@@ -357,6 +358,7 @@ impl ProgressBar {
                 est: Estimate::new(),
                 tick_thread: None,
                 steady_tick: 0,
+                log_level: None,
             })),
         }
     }
@@ -365,6 +367,21 @@ impl ProgressBar {
     pub fn with_style(self, style: ProgressStyle) -> ProgressBar {
         self.state.write().style = style;
         self
+    }
+
+    /// Set this `ProgressBar` as the global logger, for use with the [`log`](https://docs.rs/log)
+    /// facade.
+    ///
+    /// If you use a normal logger (eg. `env_logger`) whilst using `indicatif`, you'll end up
+    /// clobbering your logs with copies of the progress bar.  Using `ProgressBar` as your logger
+    /// avoids this problem by printing logs above the bar where they belong.
+    pub fn init_logger(&self, level: log::LevelFilter) -> Result<(), log::SetLoggerError> {
+        self.state.write().log_level = Some(level);
+        log::set_boxed_logger(Box::new(ProgressBar {
+            state: self.state.clone(),
+        }))?;
+        log::set_max_level(level);
+        Ok(())
     }
 
     /// Creates a new spinner.
@@ -910,6 +927,31 @@ impl MultiProgress {
 
         Ok(())
     }
+}
+
+impl log::Log for ProgressBar {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        match self.state.read().log_level {
+            None => false,
+            Some(level) => metadata.level() <= level,
+        }
+    }
+
+    fn log(&self, record: &log::Record) {
+        // I just chose the same colors as env_logger.
+        let level = match record.level() {
+            log::Level::Error => style("ERROR").red().bold(),
+            log::Level::Warn => style("WARN").yellow(),
+            log::Level::Info => style("INFO").green(),
+            log::Level::Debug => style("DEBUG").blue(),
+            log::Level::Trace => style("TRACE").white(),
+        };
+        if self.enabled(record.metadata()) {
+            self.println(format!("{} {}", level, record.args()));
+        }
+    }
+
+    fn flush(&self) {}
 }
 
 impl Drop for ProgressBar {
