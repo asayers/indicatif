@@ -446,6 +446,7 @@ impl ProgressState {
 }
 
 /// A progress bar or spinner.
+#[derive(Clone)]
 pub struct ProgressBar {
     state: Arc<RwLock<ProgressState>>,
 }
