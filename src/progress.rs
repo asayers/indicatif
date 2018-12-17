@@ -117,8 +117,19 @@ impl ProgressDrawTarget {
     /// This is internally used in progress bars to figure out if overhead
     /// from drawing can be prevented.
     pub fn is_hidden(&self) -> bool {
+        self.is_redirected()
+            || match self.kind {
+                ProgressDrawTargetKind::Hidden => true,
+                _ => false,
+            }
+    }
+
+    /// Returns true if the draw target is redirected to a file.
+    ///
+    /// This is internally used in progress bars to figure out if overhead
+    /// from drawing can be prevented.
+    pub fn is_redirected(&self) -> bool {
         match self.kind {
-            ProgressDrawTargetKind::Hidden => true,
             ProgressDrawTargetKind::Term(ref term, ..) => !term.is_term(),
             _ => false,
         }
@@ -505,22 +516,32 @@ impl ProgressBar {
     pub fn println<I: Into<String>>(&self, msg: I) {
         let mut state = self.state.write();
 
-        let mut lines: Vec<String> = msg.into().lines().map(Into::into).collect();
-        let orphan_lines = lines.len();
-        if state.should_render() {
-            lines.extend(state.style.format_state(&*state));
+        if state.draw_target.is_redirected() {
+            match state.draw_target.kind {
+                ProgressDrawTargetKind::Term(ref term, _, _) => {
+                    term.write_line(&msg.into()).unwrap();
+                    term.flush().unwrap();
+                }
+                _ => (),
+            }
+        } else {
+            let mut lines: Vec<String> = msg.into().lines().map(Into::into).collect();
+            let orphan_lines = lines.len();
+            if state.should_render() {
+                lines.extend(state.style.format_state(&*state));
+            }
+
+            let draw_state = ProgressDrawState {
+                lines,
+                orphan_lines,
+                finished: state.is_finished(),
+                force_draw: true,
+                move_cursor: false,
+                ts: Instant::now(),
+            };
+
+            state.draw_target.apply_draw_state(draw_state).ok();
         }
-
-        let draw_state = ProgressDrawState {
-            lines,
-            orphan_lines,
-            finished: state.is_finished(),
-            force_draw: true,
-            move_cursor: false,
-            ts: Instant::now(),
-        };
-
-        state.draw_target.apply_draw_state(draw_state).ok();
     }
 
     /// Sets the position of the progress bar.
